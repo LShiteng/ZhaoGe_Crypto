@@ -1,0 +1,25 @@
+# Selenium for browser automation
+selenium==4.5.0
+
+# Web3 dependencies - using older version with pre-compiled wheels
+web3==5.31.3
+eth-account==0.5.9
+eth-utils==1.10.0
+
+# Environment management
+python-dotenv==1.0.0
+
+# HTTP requests
+requests==2.31.0
+
+# Logging
+python-json-logger==2.0.7
+
+# Schedule tasks
+schedule==1.2.1
+
+# Cryptography
+cryptography==41.0.7
+
+# Windows support
+pywin32==306
