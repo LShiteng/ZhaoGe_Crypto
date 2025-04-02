@@ -233,7 +233,9 @@ def analyze_market_rebound(period_start, period_end):
         return pd.DataFrame()
     
     btc_max_rebound = btc_result[2]
-    btc_current_rebound = btc_result[3]
+    
+    # 优化：预先创建CoinGeckoAPI实例，避免重复创建
+    cg = CoinGeckoAPI()
     
     # 处理其他币种
     request_count = 0
@@ -265,22 +267,41 @@ def analyze_market_rebound(period_start, period_end):
                     request_count = 0
                     start_time = time.time()
                 
-                df = get_coin_data(coin_id, start_timestamp, end_timestamp)
+                # 使用预先创建的API实例
+                try:
+                    prices = cg.get_coin_market_chart_range_by_id(
+                        id=coin_id,
+                        vs_currency='usd',
+                        from_timestamp=start_timestamp,
+                        to_timestamp=end_timestamp
+                    )
+                    
+                    if not prices['prices']:
+                        continue
+                        
+                    df = pd.DataFrame(prices['prices'], columns=['timestamp', 'price'])
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                except Exception as e:
+                    print(f"获取 {coin_id} 数据时出错: {str(e)}")
+                    continue
             
             if df is not None:
                 result = calculate_rebound_strength(df.copy(), period_start, period_end)
                 
                 if result[0] is not None:
-                    # 计算相对BTC涨幅
-                    relative_to_btc = round(result[2] - btc_max_rebound, 2)
+                    # 计算相对BTC涨幅的倍数
+                    if btc_max_rebound > 0:  # 避免除以零或负数
+                        relative_multiple = round(result[2] / btc_max_rebound, 2)
+                    else:
+                        relative_multiple = 0
                     
                     results.append({
                         '币种': symbol,
                         '最低点($)': format_price(result[0]),
                         '最高点($)': format_price(result[1]),
                         '最高点反弹(%)': round(result[2], 2),
-                        '当前反弹(%)': round(result[3], 2),
-                        '相对BTC涨幅(%)': relative_to_btc
+                        'BTC反弹(%)': round(btc_max_rebound, 2),
+                        '相对BTC倍数': relative_multiple
                     })
         except Exception as e:
             print(f"处理 {symbol} 时出错: {str(e)}")
@@ -288,16 +309,22 @@ def analyze_market_rebound(period_start, period_end):
     
     df_results = pd.DataFrame(results)
     if not df_results.empty:
-        df_results = df_results.sort_values('相对BTC涨幅(%)', ascending=False)
+        df_results = df_results.sort_values('相对BTC倍数', ascending=False)
     
     return df_results
 
 def export_to_excel(df, filename):
-    """导出到Excel"""
+    """导出到Excel并设置条件格式"""
     try:
+        # 导入openpyxl的样式模块
+        from openpyxl.styles import PatternFill
+        from openpyxl.formatting.rule import CellIsRule
+        
         writer = pd.ExcelWriter(filename, engine='openpyxl')
         df.to_excel(writer, index=False, sheet_name='反弹分析')
         
+        # 获取工作表
+        workbook = writer.book
         worksheet = writer.sheets['反弹分析']
         
         # 更新列宽以适应新的表头
@@ -306,12 +333,32 @@ def export_to_excel(df, filename):
             'B': 15,  # 最低点
             'C': 15,  # 最高点
             'D': 15,  # 最高点反弹
-            'E': 15,  # 当前反弹
-            'F': 18,  # 相对BTC涨幅
+            'E': 15,  # BTC反弹
+            'F': 15,  # 相对BTC倍数
         }
         
         for col, width in column_widths.items():
             worksheet.column_dimensions[col].width = width
+        
+        # 定义填充颜色
+        yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+        red_fill = PatternFill(start_color='FF0000', end_color='FF0000', fill_type='solid')
+        
+        # 获取相对BTC倍数列的位置
+        relative_btc_col = 'F'  # 相对BTC倍数列
+        
+        # 设置条件格式规则
+        # 超过3倍为黄色
+        worksheet.conditional_formatting.add(
+            f'{relative_btc_col}2:{relative_btc_col}{len(df)+1}',
+            CellIsRule(operator='greaterThan', formula=['3'], fill=yellow_fill)
+        )
+        
+        # 超过5倍为红色
+        worksheet.conditional_formatting.add(
+            f'{relative_btc_col}2:{relative_btc_col}{len(df)+1}',
+            CellIsRule(operator='greaterThan', formula=['5'], fill=red_fill)
+        )
         
         writer.close()
         print(f"数据已导出到 {filename}")
@@ -324,7 +371,7 @@ def export_to_excel(df, filename):
 
 def main():
     # 定义时间区间
-    period_start_bj = '2025-03-11 08:00:00'  # 区间开始时间
+    period_start_bj = '2025-03-19 00:00:00'  # 区间开始时间
     period_end_bj = '2025-04-01 08:30:00'    # 区间结束时间
     
     # 转换为UTC时间
